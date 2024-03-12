@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"sync"
 )
 
 type WeatherData struct {
@@ -15,7 +16,6 @@ type WeatherData struct {
 		Status  []string `json:"status"`
 		Weather string   `json:"weather"`
 	} `json:"data"`
-	// TotalPages int `json:"total_pages"`
 }
 
 type Result struct {
@@ -28,10 +28,13 @@ func extractNumber(s string) string {
 	return num
 }
 
+var resultMutex sync.Mutex
 var result [][]string
 
-func ExtractData(name string, pageNumber int) {
-	url := fmt.Sprintf("https://jsonmock.hackerrank.com/api/weather/search?name=%s&page=%v", name, int(pageNumber))
+func ExtractData(name string, pageNumber int, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	url := fmt.Sprintf("https://jsonmock.hackerrank.com/api/weather/search?name=%s&page=%v", name, pageNumber)
 
 	res, err := http.Get(url)
 	if err != nil {
@@ -50,16 +53,22 @@ func ExtractData(name string, pageNumber int) {
 	}
 	var weatherData WeatherData
 
-	json.Unmarshal([]byte(formattedJSON), &weatherData)
+	jsonErr := json.Unmarshal(formattedJSON, &weatherData)
+	if jsonErr != nil {
+		fmt.Println("Error while unmarshal operation", jsonErr.Error())
+		return
+	}
 
 	for _, item := range weatherData.Data {
 		weather := extractNumber(item.Weather)
 		wind := extractNumber(item.Status[0])
 		humidity := extractNumber(item.Status[1])
 		row := []string{item.Name, weather, wind, humidity}
-		result = append(result, row)
-	}
 
+		resultMutex.Lock()
+		result = append(result, row)
+		resultMutex.Unlock()
+	}
 }
 
 func main() {
@@ -71,26 +80,33 @@ func main() {
 	url := fmt.Sprintf("https://jsonmock.hackerrank.com/api/weather/search?name=%s", name)
 	res, err := http.Get(url)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Println("Error:", err.Error())
 		return
 	}
 
 	body, readErr := io.ReadAll(res.Body)
 	if readErr != nil {
-		fmt.Println(readErr)
+		fmt.Println("Error ", readErr.Error())
+		return
 	}
 
 	r := Result{}
 	jsonErr := json.Unmarshal(body, &r)
 	if jsonErr != nil {
-		fmt.Println(jsonErr)
+		fmt.Println("Error", jsonErr.Error())
+		return
 	}
+
 	fmt.Println(r.TotalPages)
 
+	var wg sync.WaitGroup
+
 	for i := 1; i <= int(r.TotalPages); i++ {
-		ExtractData(name, i)
+		wg.Add(1)
+		go ExtractData(name, i, &wg)
 	}
 
-	fmt.Println(result)
+	wg.Wait()
 
+	fmt.Println(result)
 }
